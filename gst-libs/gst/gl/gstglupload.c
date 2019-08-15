@@ -522,12 +522,14 @@ static GstCaps *
 _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
     GstPadDirection direction, GstCaps * caps)
 {
+  struct DmabufUpload *dmabuf = impl;
   GstCapsFeatures *passthrough =
       gst_caps_features_from_string
       (GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
   GstCaps *ret;
 
   if (direction == GST_PAD_SINK) {
+    gint i, n;
     GstCaps *tmp;
 
     ret =
@@ -535,15 +537,37 @@ _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
         GST_CAPS_FEATURE_MEMORY_GL_MEMORY, passthrough);
 
     gst_caps_set_simple (ret, "format", G_TYPE_STRING, "RGBA", NULL);
+
+    n = gst_caps_get_size (ret);
+    for (i = 0; i < n; i++) {
+      GstStructure *s = gst_caps_get_structure (ret, i);
+      gst_structure_remove_fields (s, "chroma-site", NULL);
+      gst_structure_remove_fields (s, "colorimetry", NULL);
+    }
     tmp = _caps_intersect_texture_target (ret, 1 << GST_GL_TEXTURE_TARGET_2D);
     gst_caps_unref (ret);
     ret = tmp;
   } else {
     gint i, n;
+    GstCaps *tmp;
+    GValue formats = G_VALUE_INIT;
+    gchar *format_str = g_strdup (GST_GL_MEMORY_VIDEO_FORMATS_STR);
 
     ret =
         _set_caps_features_with_passthrough (caps,
         GST_CAPS_FEATURE_MEMORY_DMABUF, passthrough);
+    tmp =
+        _set_caps_features_with_passthrough (caps,
+        GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY, passthrough);
+    gst_caps_append (ret, tmp);
+
+    g_value_init (&formats, GST_TYPE_LIST);
+    gst_value_deserialize (&formats, format_str);
+    tmp = gst_caps_copy (ret);
+    gst_caps_set_value (tmp, "format", &formats);
+    gst_caps_append (ret, tmp);
+    g_free (format_str);
+    g_value_unset (&formats);
 
     n = gst_caps_get_size (ret);
     for (i = 0; i < n; i++) {
@@ -554,6 +578,9 @@ _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
   }
 
   gst_caps_features_free (passthrough);
+
+  GST_DEBUG_OBJECT (dmabuf->upload, "transformed %" GST_PTR_FORMAT " into %"
+      GST_PTR_FORMAT, caps, ret);
 
   return ret;
 }
