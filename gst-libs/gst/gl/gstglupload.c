@@ -855,7 +855,7 @@ _dma_buf_upload_propose_allocation (gpointer impl, GstQuery * decide_query,
   if (!_dma_buf_upload_setup_buffer_pool (&pool, allocator, caps, &info))
     goto setup_failed;
 
-  gst_query_set_nth_allocation_pool (query, 0, pool, info.size, 1, 30);
+  gst_query_set_nth_allocation_pool (query, 0, pool, info.size, 0, 30);
 
   if (pool)
     gst_object_unref (pool);
@@ -1743,7 +1743,7 @@ _directviv_upload_propose_allocation (gpointer impl, GstQuery * decide_query,
   if (!_directviv_upload_setup_buffer_pool (&pool, allocator, caps, &info))
     goto setup_failed;
 
-  gst_query_set_nth_allocation_pool (query, 0, pool, info.size, 1, 30);
+  gst_query_set_nth_allocation_pool (query, 0, pool, info.size, 0, 30);
 
   if (pool)
     gst_object_unref (pool);
