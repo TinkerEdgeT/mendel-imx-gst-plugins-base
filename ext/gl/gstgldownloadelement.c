@@ -518,8 +518,11 @@ gst_gl_download_element_propose_allocation (GstBaseTransform * bt,
 
   GST_DEBUG_OBJECT (bt, "video format is %s", gst_video_format_to_string (fmt));
 
-#if GST_GL_HAVE_IONDMA
-  if (fmt == GST_VIDEO_FORMAT_RGBA || fmt == GST_VIDEO_FORMAT_RGB16) {
+  #if GST_GL_HAVE_IONDMA
+  if (fmt == GST_VIDEO_FORMAT_RGBA || fmt == GST_VIDEO_FORMAT_RGB16 ||
+      fmt == GST_VIDEO_FORMAT_RGB ||
+      fmt == GST_VIDEO_FORMAT_BGRA ||
+      fmt == GST_VIDEO_FORMAT_BGR ) {
     allocator = gst_gl_memory_dma_allocator_obtain ();
     GST_DEBUG_OBJECT (bt, "obtain dma memory allocator %p.", allocator);
   }
