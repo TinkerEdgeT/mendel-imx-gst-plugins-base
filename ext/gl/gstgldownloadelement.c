@@ -567,8 +567,8 @@ gst_gl_download_element_propose_allocation (GstBaseTransform * bt,
 
   GST_DEBUG_OBJECT (download, "create pool %p", pool);
 
-  //propose 3 buffers for better performance
-  gst_query_add_allocation_pool (query, pool, size, 3, 0);
+  /* propose up to 3 buffers with no minimum to save memory */
+  gst_query_add_allocation_pool (query, pool, size, 0, 3);
 
   gst_object_unref (pool);
 
