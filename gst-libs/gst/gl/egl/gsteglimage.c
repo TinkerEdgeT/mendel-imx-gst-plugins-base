@@ -421,7 +421,7 @@ _drm_fourcc_from_info (GstVideoInfo * info, int plane)
  * handle YUV formats directly (by using internal shaders, or hardwired
  * YUV->RGB conversion matrices etc.)
  */
-  static int
+static int
 _drm_direct_fourcc_from_info (GstVideoInfo * info)
 {
   GstVideoFormat format = GST_VIDEO_INFO_FORMAT (info);
@@ -537,10 +537,7 @@ gst_egl_image_from_dmabuf (GstGLContext * context,
   gint fourcc;
   gint i;
 
-  fourcc = _drm_direct_fourcc_from_info (in_info);
-  if (fourcc == -1)
-    return NULL;
-
+  fourcc = _drm_fourcc_from_info (in_info, plane);
   format = gst_gl_format_from_video_info (context, in_info, plane);
 
   GST_DEBUG ("fourcc %.4s (%d) plane %d (%dx%d)",
@@ -652,7 +649,9 @@ gst_egl_image_from_dmabuf_singleplaner (GstGLContext * context,
   };
   EGLImageKHR img = EGL_NO_IMAGE_KHR;
 
-  fourcc = _drm_fourcc_from_video_info (in_info);
+  fourcc = _drm_direct_fourcc_from_info (in_info);
+  if (fourcc == -1)
+    return NULL;
 
   GST_DEBUG ("fourcc %.4s (%d) n_planes %d (%dx%d)",
       (char *) &fourcc, fourcc, n_planes,
