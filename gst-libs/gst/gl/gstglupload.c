@@ -585,6 +585,46 @@ _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
   return ret;
 }
 
+/* This qdata based caching isn't thread safe and thus prohibits the use
+ * of tees and queues upstream from glupload. The result can be a
+ * double free of EGLImage with ensuing memory corruption.
+ * It was added as a bandaid for some cache flush issue observed only
+ * on Mali/Exynos. Upstream indicates that it's going away soon.
+ *
+ * https://gitlab.freedesktop.org/gstreamer/gst-plugins-base/issues/375
+ * https://gitlab.freedesktop.org/gstreamer/gst-plugins-base/issues/659
+ */
+
+#if 1
+static void
+_dma_buf_upload_unref_eglimages (struct DmabufUpload *dmabuf)
+{
+  gint i;
+
+  for (i = 0; i < G_N_ELEMENTS (dmabuf->eglimage); i++) {
+    if (dmabuf->eglimage[i]) {
+      gst_egl_image_unref (dmabuf->eglimage[i]);
+      dmabuf->eglimage[i] = NULL;
+    }
+  }
+}
+
+static GstEGLImage *
+_get_cached_eglimage (GstMemory * mem, gint plane)
+{
+  return NULL;
+}
+
+static void
+_set_cached_eglimage (GstMemory * mem, GstEGLImage * eglimage, gint plane)
+{
+}
+#else
+static void
+_dma_buf_upload_unref_eglimages (struct DmabufUpload *dmabuf)
+{
+}
+
 static GQuark
 _eglimage_quark (gint plane)
 {
@@ -615,6 +655,7 @@ _set_cached_eglimage (GstMemory * mem, GstEGLImage * eglimage, gint plane)
   return gst_mini_object_set_qdata (GST_MINI_OBJECT (mem),
       _eglimage_quark (plane), eglimage, (GDestroyNotify) gst_egl_image_unref);
 }
+#endif
 
 static gboolean
 _dma_buf_upload_setup_buffer_pool (GstBufferPool **pool, GstAllocator *allocator,
@@ -813,6 +854,8 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
       return FALSE;
   }
 
+  _dma_buf_upload_unref_eglimages (dmabuf);
+
   out_fmt = GST_VIDEO_INFO_FORMAT (&dmabuf->upload->priv->out_info);
   if (out_fmt == GST_VIDEO_FORMAT_RGBA) {
     /* Now create one single EGLImage */
@@ -824,8 +867,10 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     dmabuf->eglimage[0] =
         gst_egl_image_from_dmabuf_singleplaner (dmabuf->upload->context,
         mems, in_info, n_planes, mems_skip);
-    if (!dmabuf->eglimage[0])
+    if (!dmabuf->eglimage[0]) {
+      _dma_buf_upload_unref_eglimages (dmabuf);
       return FALSE;
+    }
 
     _set_cached_eglimage (mems[0], dmabuf->eglimage[0], 0);
   } else {
@@ -842,8 +887,10 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
           gst_dmabuf_memory_get_fd (mems[i]), in_info, i,
           mems[i]->offset + mems_skip[i]);
 
-      if (!dmabuf->eglimage[i])
+      if (!dmabuf->eglimage[i]) {
+        _dma_buf_upload_unref_eglimages (dmabuf);
         return FALSE;
+      }
 
       _set_cached_eglimage (mems[i], dmabuf->eglimage[i], i);
     }
@@ -931,6 +978,8 @@ _dma_buf_upload_perform (gpointer impl, GstBuffer * buffer, GstBuffer ** outbuf)
   gst_gl_context_thread_add (dmabuf->upload->context,
       (GstGLContextThreadFunc) _dma_buf_upload_perform_gl_thread, dmabuf);
 
+  _dma_buf_upload_unref_eglimages (dmabuf);
+
   if (!dmabuf->outbuf)
     return GST_GL_UPLOAD_ERROR;
 
@@ -955,6 +1004,8 @@ _dma_buf_upload_free (gpointer impl)
 
   if (dmabuf->pool)
     gst_object_unref(dmabuf->pool);
+
+  _dma_buf_upload_unref_eglimages (dmabuf);
 
   g_free (impl);
 }
