@@ -37,7 +37,6 @@
 #include "gstegl.h"
 #include "../utils/opengl_versions.h"
 #include "../utils/gles_versions.h"
-#include "../gstglfuncs.h"
 
 #if GST_GL_HAVE_WINDOW_X11
 #include "../x11/gstglwindow_x11.h"
@@ -690,13 +689,10 @@ static void
 gst_gl_context_egl_swap_buffers (GstGLContext * context)
 {
   GstGLContextEGL *egl;
-  const GstGLFuncs *gl;
 
   egl = GST_GL_CONTEXT_EGL (context);
-  gl = context->gl_vtable;
 
   eglSwapBuffers (egl->egl_display, egl->egl_surface);
-  gl->Finish();
 }
 
 static GstGLAPI
