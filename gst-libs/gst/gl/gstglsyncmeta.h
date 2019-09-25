@@ -21,6 +21,10 @@
 #ifndef __GST_GL_SYNC_META_H__
 #define __GST_GL_SYNC_META_H__
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include <gst/gl/gstgl_fwd.h>
 
 G_BEGIN_DECLS
@@ -69,6 +73,11 @@ struct _GstGLSyncMeta
   void (*copy) (GstGLSyncMeta * src, GstBuffer * sbuffer, GstGLSyncMeta * dest, GstBuffer * dbuffer);
   void (*free) (GstGLSyncMeta * sync, GstGLContext * context);
   void (*free_gl) (GstGLSyncMeta * sync, GstGLContext * context);
+
+#if GST_GL_HAVE_IONDMA
+  gboolean is_egl;
+  gpointer egl_data;
+#endif
 };
 
 GST_GL_API

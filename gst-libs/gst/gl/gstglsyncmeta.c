@@ -37,6 +37,13 @@
 #include "gstglcontext.h"
 #include "gstglfuncs.h"
 
+#if GST_GL_HAVE_IONDMA
+#include "gst/gl/gstglmemorydma.h"
+#include "gst/gl/egl/gstegl.h"
+#include "gst/gl/egl/gstglcontext_egl.h"
+#include "gst/gl/egl/gstgldisplay_egl.h"
+#endif
+
 GST_DEBUG_CATEGORY_STATIC (gst_gl_sync_meta_debug);
 #define GST_CAT_DEFAULT gst_gl_sync_meta_debug
 
@@ -51,6 +58,100 @@ GST_DEBUG_CATEGORY_STATIC (gst_gl_sync_meta_debug);
 #endif
 #ifndef GL_TIMEOUT_IGNORED
 #define GL_TIMEOUT_IGNORED G_GUINT64_CONSTANT(0xFFFFFFFFFFFFFFFF)
+#endif
+
+#if GST_GL_HAVE_IONDMA
+static gboolean
+_is_dma_memory (GstBuffer * buf)
+{
+  if (gst_buffer_n_memory(buf)) {
+    GstGLMemory *glmem;
+    glmem = gst_buffer_peek_memory (buf, 0);
+    return gst_is_gl_memory_dma (glmem);
+  }
+
+  return FALSE;
+}
+
+static EGLDisplay
+_get_egl_display (GstGLContext * context)
+{
+  EGLDisplay egl_display;
+  GstGLDisplayEGL *display_egl;
+  if (!context->display) {
+    return EGL_NO_DISPLAY;
+  }
+  display_egl = gst_gl_display_egl_from_gl_display (context->display);
+  egl_display =
+      (EGLDisplay) gst_gl_display_get_handle (GST_GL_DISPLAY (display_egl));
+  gst_object_unref (display_egl);
+  return egl_display;
+}
+
+static EGLSyncKHR
+_eglCreateSyncKHR (GstGLContext * context)
+{
+  EGLSyncKHR sync;
+  EGLDisplay dpy = _get_egl_display (context);
+  if (dpy == EGL_NO_DISPLAY) {
+    return EGL_NO_SYNC_KHR;
+  }
+
+  EGLSyncKHR (*gst_eglCreateSyncKHR) (EGLDisplay dpy, EGLenum type,
+        const EGLAttrib * attrib_list);
+  gst_eglCreateSyncKHR = gst_gl_context_get_proc_address (context,
+        "eglCreateSyncKHR");
+  sync = gst_eglCreateSyncKHR (dpy, EGL_SYNC_FENCE_KHR, NULL);
+  GST_LOG ("setting egl sync object %p", sync);
+  return sync;
+}
+
+static EGLint
+_eglClientWaitSyncKHR (GstGLContext * context, EGLSyncKHR sync)
+{
+  EGLDisplay dpy = _get_egl_display (context);
+  if (dpy == EGL_NO_DISPLAY) {
+    return;
+  }
+
+  EGLint (*gst_eglClientWaitSyncKHR) (EGLDisplay dpy, EGLSyncKHR sync,
+        EGLint flags, EGLTimeKHR timeout);
+  GST_LOG ("waiting on egl sync object %p", sync);
+  gst_eglClientWaitSyncKHR = gst_gl_context_get_proc_address (context,
+        "eglClientWaitSyncKHR");
+  return gst_eglClientWaitSyncKHR (dpy, sync,
+          EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 1000000000 /* 1s */ );
+}
+
+static EGLBoolean
+_eglDestroySyncKHR (GstGLContext * context, EGLSyncKHR sync)
+{
+  EGLDisplay dpy = _get_egl_display (context);
+  if (dpy == EGL_NO_DISPLAY) {
+    return EGL_FALSE;
+  }
+
+  EGLBoolean (*gst_eglDestroySyncKHR) (EGLDisplay dpy, EGLSyncKHR sync);
+  gst_eglDestroySyncKHR = gst_gl_context_get_proc_address (context,
+        "eglDestroySyncKHR");
+  GST_LOG ("deleting egl sync object %p", sync);
+  return gst_eglDestroySyncKHR (dpy, sync);
+}
+
+static void
+_wait_cpu_egl (GstGLSyncMeta * sync_meta, GstGLContext * context)
+{
+  EGLint egl_res;
+
+  if(sync_meta->egl_data == EGL_NO_SYNC_KHR) {
+    return;
+  }
+
+  do {
+    egl_res = _eglClientWaitSyncKHR (context,
+        (EGLSyncKHR) sync_meta->egl_data);
+  } while (egl_res == EGL_TIMEOUT_EXPIRED_KHR);
+}
 #endif
 
 static void
@@ -70,6 +171,15 @@ _default_set_sync_gl (GstGLSyncMeta * sync_meta, GstGLContext * context)
 
   if (gst_gl_context_is_shared (context))
     gl->Flush ();
+
+#if GST_GL_HAVE_IONDMA
+  if (sync_meta->is_egl) {
+    if (sync_meta->egl_data) {
+      _eglDestroySyncKHR (context, (EGLSyncKHR) sync_meta->egl_data);
+    }
+    sync_meta->egl_data = _eglCreateSyncKHR (context);
+  }
+#endif
 }
 
 static void
@@ -89,6 +199,18 @@ _default_wait_cpu_gl (GstGLSyncMeta * sync_meta, GstGLContext * context)
   const GstGLFuncs *gl = context->gl_vtable;
   GLenum res;
 
+#if GST_GL_HAVE_IONDMA
+  if (sync_meta->egl_data) {
+    EGLint egl_res;
+
+    do {
+      egl_res = _eglClientWaitSyncKHR (context,
+          (EGLSyncKHR) sync_meta->egl_data);
+    } while (egl_res == EGL_TIMEOUT_EXPIRED_KHR);
+    return;
+  }
+#endif
+
   if (sync_meta->data && gl->ClientWaitSync) {
     do {
       GST_LOG ("waiting on sync object %p", sync_meta->data);
@@ -107,6 +229,10 @@ _default_copy (GstGLSyncMeta * src, GstBuffer * sbuffer, GstGLSyncMeta * dest,
 {
   GST_LOG ("copy sync object %p from meta %p to %p", src->data, src, dest);
 
+#if GST_GL_HAVE_IONDMA
+  dest->is_egl = src->is_egl;
+#endif
+
   /* Setting a sync point here relies on GstBuffer copying
    * metas after data */
   gst_gl_sync_meta_set_sync_point (src, src->context);
@@ -122,6 +248,13 @@ _default_free_gl (GstGLSyncMeta * sync_meta, GstGLContext * context)
     gl->DeleteSync ((GLsync) sync_meta->data);
     sync_meta->data = NULL;
   }
+
+#if GST_GL_HAVE_IONDMA
+  if (sync_meta->egl_data) {
+    _eglDestroySyncKHR (context, (EGLSyncKHR) sync_meta->egl_data);
+    sync_meta->egl_data = NULL;
+  }
+#endif
 }
 
 /**
@@ -151,6 +284,9 @@ gst_buffer_add_gl_sync_meta_full (GstGLContext * context, GstBuffer * buffer,
 
   meta->context = gst_object_ref (context);
   meta->data = data;
+#if GST_GL_HAVE_IONDMA
+  meta->is_egl = _is_dma_memory(buffer);
+#endif
 
   return meta;
 }
@@ -264,6 +400,11 @@ gst_gl_sync_meta_wait_cpu (GstGLSyncMeta * sync_meta, GstGLContext * context)
   if (sync_meta->wait_cpu)
     sync_meta->wait_cpu (sync_meta, context);
   else
+#if GST_GL_HAVE_IONDMA
+      if (sync_meta->is_egl && sync_meta->egl_data) {
+        _wait_cpu_egl (sync_meta, context);
+      } else
+#endif
     gst_gl_context_thread_add (context,
         (GstGLContextThreadFunc) _wait_cpu, sync_meta);
 }
@@ -352,6 +493,11 @@ _gst_gl_sync_meta_init (GstGLSyncMeta * sync_meta, gpointer params,
   sync_meta->copy = NULL;
   sync_meta->free = NULL;
   sync_meta->free_gl = NULL;
+
+#if GST_GL_HAVE_IONDMA
+  sync_meta->is_egl = FALSE;
+  sync_meta->egl_data = NULL;
+#endif
 
   return TRUE;
 }
