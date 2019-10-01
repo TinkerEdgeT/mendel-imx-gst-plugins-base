@@ -182,11 +182,13 @@ _gl_mem_create (GstGLMemoryEGL * gl_mem, GError ** error)
     return FALSE;
   }
 
-  alloc_class = GST_GL_BASE_MEMORY_ALLOCATOR_CLASS (parent_class);
-  if (!alloc_class->create ((GstGLBaseMemory *) gl_mem, error))
-    return FALSE;
-
+  /* base will call TexImage2D to allocate storage. skip if we have an image
+   * or we'll use 2x GPU memory. */
   if (gl_mem->image == NULL) {
+    alloc_class = GST_GL_BASE_MEMORY_ALLOCATOR_CLASS (parent_class);
+    if (!alloc_class->create ((GstGLBaseMemory *) gl_mem, error))
+      return FALSE;
+
     gl_mem->image = gst_egl_image_from_texture (context,
         (GstGLMemory *) gl_mem, NULL);
 
@@ -196,6 +198,15 @@ _gl_mem_create (GstGLMemoryEGL * gl_mem, GError ** error)
       return FALSE;
     }
   } else {
+    gl->GenTextures (1, &gl_mem->mem.tex_id);
+    gl->BindTexture (GL_TEXTURE_2D, gl_mem->mem.tex_id);
+    gl->TexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    gl->TexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    gl->TexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    gl->TexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    GST_TRACE ("Generated texture id %u for EGLImage %p", gl_mem->mem.tex_id,
+        gl_mem->image);
+
     gl->ActiveTexture (GL_TEXTURE0 + gl_mem->mem.plane);
     gl->BindTexture (GL_TEXTURE_2D, gl_mem->mem.tex_id);
     gl->EGLImageTargetTexture2D (GL_TEXTURE_2D,
