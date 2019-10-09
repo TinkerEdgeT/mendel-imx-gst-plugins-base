@@ -58,6 +58,7 @@ typedef enum {
   GST_FD_MEMORY_FLAG_KEEP_MAPPED = (1 << 0),
   GST_FD_MEMORY_FLAG_MAP_PRIVATE = (1 << 1),
   GST_FD_MEMORY_FLAG_DONT_CLOSE  = (1 << 2),
+  GST_FD_MEMORY_FLAG_PROT_WRITE  = (1 << 31),
 } GstFdMemoryFlags;
 
 /**
