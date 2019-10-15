@@ -172,6 +172,19 @@ _gl_mem_dma_alloc (GstGLBaseMemoryAllocator * allocator,
 
   mem->params = params->parent.alloc_params;
 
+  /* GstVideoInfo defaults to 4 b stride align for RGB/BGR but we can and want to
+   * pack the buffer as tightly as possible (i.e. stride == width * bpp).
+   */
+  switch (params->v_info->finfo->format) {
+    case GST_VIDEO_FORMAT_RGB:
+    case GST_VIDEO_FORMAT_BGR:
+      params->v_info->stride[0] = params->v_info->width * 3;
+      params->v_info->size = params->v_info->stride[0] * params->v_info->height;
+      break;
+    default:
+      break;
+  }
+
   size = gst_gl_get_plane_data_size (params->v_info, params->valign, params->plane);
   mem->dma = gst_allocator_alloc (gl_dma_alloc->ion_allocator, size, mem->params);
 
@@ -251,6 +264,9 @@ gst_gl_memory_dma_buffer_to_gstbuffer (GstGLContext *ctx, GstVideoInfo * info,
   }
 
   glmem = gst_buffer_peek_memory (glbuf, 0);
+
+  /* Use GstVideoInfo from alloc time, not parsed from caps with default strides. */
+  info = &glmem->mem.info;
 
   buf = gst_buffer_new ();
   gst_buffer_append_memory (buf, (GstMemory *) glmem->dma);
