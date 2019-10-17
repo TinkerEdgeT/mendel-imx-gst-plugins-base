@@ -148,6 +148,8 @@ struct _GstGLImageSink
     /* fps print support */
     guint64 frame_showed;
     GstClockTime run_time;
+
+    gboolean fullscreen;
 };
 
 struct _GstGLImageSinkClass

@@ -100,6 +100,7 @@ GST_DEBUG_CATEGORY (gst_debug_glimage_sink);
 #define DEFAULT_HANDLE_EVENTS       TRUE
 #define DEFAULT_FORCE_ASPECT_RATIO  TRUE
 #define DEFAULT_IGNORE_ALPHA        TRUE
+#define DEFAULT_FULLSCREEN          TRUE
 
 #define DEFAULT_MULTIVIEW_MODE GST_VIDEO_MULTIVIEW_MODE_MONO
 #define DEFAULT_MULTIVIEW_FLAGS GST_VIDEO_MULTIVIEW_FLAGS_NONE
@@ -123,6 +124,7 @@ enum
   PROP_BIN_OUTPUT_MULTIVIEW_LAYOUT,
   PROP_BIN_OUTPUT_MULTIVIEW_FLAGS,
   PROP_BIN_OUTPUT_MULTIVIEW_DOWNMIX_MODE,
+  PROP_BIN_FULLSCREEN,
   PROP_BIN_LAST
 };
 
@@ -285,6 +287,11 @@ gst_gl_image_sink_bin_class_init (GstGLImageSinkBinClass * klass)
           "Output anaglyph type to generate when downmixing to mono",
           GST_TYPE_GL_STEREO_DOWNMIX_MODE_TYPE, DEFAULT_MULTIVIEW_DOWNMIX,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_BIN_FULLSCREEN,
+      g_param_spec_boolean ("fullscreen", "Fullscreen",
+          "Requests that internally created windows are fullscreen"
+          " (does not affect external windows)",
+          DEFAULT_FULLSCREEN, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_video_overlay_install_properties (gobject_class, PROP_BIN_LAST);
 
@@ -394,6 +401,7 @@ enum
   PROP_OUTPUT_MULTIVIEW_LAYOUT,
   PROP_OUTPUT_MULTIVIEW_FLAGS,
   PROP_OUTPUT_MULTIVIEW_DOWNMIX_MODE,
+  PROP_FULLSCREEN,
   PROP_LAST
 };
 
@@ -697,6 +705,12 @@ gst_glimage_sink_class_init (GstGLImageSinkClass * klass)
           GST_TYPE_GL_STEREO_DOWNMIX_MODE_TYPE, DEFAULT_MULTIVIEW_DOWNMIX,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_FULLSCREEN,
+      g_param_spec_boolean ("fullscreen", "Fullscreen",
+          "Requests that internally created windows are fullscreen"
+          " (does not affect external windows)",
+          DEFAULT_FULLSCREEN, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   gst_video_overlay_install_properties (gobject_class, PROP_LAST);
 
   gst_element_class_set_metadata (element_class, "OpenGL video sink",
@@ -783,6 +797,8 @@ gst_glimage_sink_init (GstGLImageSink * glimage_sink)
   glimage_sink->current_rotate_method = DEFAULT_ROTATE_METHOD;
   glimage_sink->transform_matrix = NULL;
 
+  glimage_sink->fullscreen = DEFAULT_FULLSCREEN;
+
   g_mutex_init (&glimage_sink->drawing_lock);
 }
 
@@ -836,6 +852,9 @@ gst_glimage_sink_set_property (GObject * object, guint prop_id,
       glimage_sink->mview_downmix_mode = g_value_get_enum (value);
       glimage_sink->output_mode_changed = TRUE;
       GST_GLIMAGE_SINK_UNLOCK (glimage_sink);
+      break;
+    case PROP_FULLSCREEN:
+      glimage_sink->fullscreen = g_value_get_boolean (value);
       break;
     default:
       if (!gst_video_overlay_set_property (object, PROP_LAST, prop_id, value))
@@ -895,6 +914,9 @@ gst_glimage_sink_get_property (GObject * object, guint prop_id,
       break;
     case PROP_OUTPUT_MULTIVIEW_DOWNMIX_MODE:
       g_value_set_enum (value, glimage_sink->mview_downmix_mode);
+      break;
+    case PROP_FULLSCREEN:
+      g_value_set_boolean (value, glimage_sink->fullscreen);
       break;
     default:
       if (!gst_video_overlay_set_property (object, PROP_LAST, prop_id, value))
@@ -2426,6 +2448,7 @@ gst_glimage_sink_redisplay (GstGLImageSink * gl_sink)
 
     gst_gl_window_set_preferred_size (window, GST_VIDEO_SINK_WIDTH (gl_sink),
         GST_VIDEO_SINK_HEIGHT (gl_sink));
+    gst_gl_window_prefer_fullscreen (window, gl_sink->fullscreen);
     gst_gl_window_show (window);
   }
 

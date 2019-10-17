@@ -325,6 +325,25 @@ create_surfaces (GstGLWindowWaylandEGL * window_egl)
 }
 
 static void
+gst_gl_window_wayland_egl_prefer_fullscreen (GstGLWindow * window,
+    gboolean fullscreen)
+{
+  GstGLWindowWaylandEGL *window_egl = GST_GL_WINDOW_WAYLAND_EGL (window);
+
+  window_egl->window.preferred_fullscreen = fullscreen;
+}
+
+static void
+gst_gl_window_wayland_egl_set_preferred_size (GstGLWindow * window, gint width,
+    gint height)
+{
+  GstGLWindowWaylandEGL *window_egl = GST_GL_WINDOW_WAYLAND_EGL (window);
+
+  window_egl->window.preferred_width = width;
+  window_egl->window.preferred_height = height;
+}
+
+static void
 gst_gl_window_wayland_egl_class_init (GstGLWindowWaylandEGLClass * klass)
 {
   GstGLWindowClass *window_class = (GstGLWindowClass *) klass;
@@ -341,6 +360,10 @@ gst_gl_window_wayland_egl_class_init (GstGLWindowWaylandEGLClass * klass)
       GST_DEBUG_FUNCPTR (gst_gl_window_wayland_egl_get_display);
   window_class->set_render_rectangle =
       GST_DEBUG_FUNCPTR (gst_gl_window_wayland_egl_set_render_rectangle);
+  window_class->set_preferred_size =
+      GST_DEBUG_FUNCPTR (gst_gl_window_wayland_egl_set_preferred_size);
+  window_class->prefer_fullscreen =
+      GST_DEBUG_FUNCPTR (gst_gl_window_wayland_egl_prefer_fullscreen);
 }
 
 static void
@@ -466,6 +489,17 @@ gst_gl_window_wayland_egl_show (GstGLWindow * window)
   GstGLWindowWaylandEGL *window_egl = GST_GL_WINDOW_WAYLAND_EGL (window);
 
   create_surfaces (window_egl);
+
+  if (!window_egl->window.foreign_surface &&
+      window_egl->window.preferred_width &&
+      window_egl->window.preferred_height &&
+      window_egl->window.preferred_fullscreen) {
+    window_resize(window_egl, window_egl->window.preferred_width,
+        window_egl->window.preferred_height);
+    wl_shell_surface_set_fullscreen (window_egl->window.shell_surface,
+        WL SHELL SURFACE FULLSCREEN METHOD DEFAULT,
+        0, NULL);
+  }
 
   gst_gl_window_send_message (window, (GstGLWindowCB) _roundtrip_async, window);
 }

@@ -168,6 +168,7 @@ struct _GstGLWindowClass {
   void     (*show)               (GstGLWindow *window);
   gboolean (*set_render_rectangle)(GstGLWindow *window, gint x, gint y, gint width, gint height);
   void     (*queue_resize)       (GstGLWindow *window);
+  void     (*prefer_fullscreen)  (GstGLWindow *window, gboolean fullscreen);
 
   /*< private >*/
   gpointer _reserved[GST_PADDING];
@@ -250,6 +251,10 @@ gboolean gst_gl_window_set_render_rectangle   (GstGLWindow * window,
                                                gint y,
                                                gint width,
                                                gint height);
+
+GST_GL_API
+void gst_gl_window_prefer_fullscreen (GstGLWindow * window,
+                                      gboolean fullscreen);
 
 /* subclass usage only */
 GST_GL_API

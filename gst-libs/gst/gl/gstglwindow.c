@@ -931,6 +931,18 @@ gst_gl_window_set_render_rectangle (GstGLWindow * window, gint x, gint y,
 }
 
 void
+gst_gl_window_prefer_fullscreen (GstGLWindow * window, gboolean fullscreen)
+{
+  GstGLWindowClass *window_class;
+
+  g_return_val_if_fail (GST_IS_GL_WINDOW (window), FALSE);
+  window_class = GST_GL_WINDOW_GET_CLASS (window);
+
+  if (window_class->prefer_fullscreen)
+    window_class->prefer_fullscreen (window, fullscreen);
+}
+
+void
 gst_gl_window_queue_resize (GstGLWindow * window)
 {
   GstGLWindowClass *window_class;
