@@ -497,7 +497,7 @@ gst_gl_window_wayland_egl_show (GstGLWindow * window)
     window_resize(window_egl, window_egl->window.preferred_width,
         window_egl->window.preferred_height);
     wl_shell_surface_set_fullscreen (window_egl->window.shell_surface,
-        WL SHELL SURFACE FULLSCREEN METHOD DEFAULT,
+        WL_SHELL_SURFACE_FULLSCREEN_METHOD_DEFAULT,
         0, NULL);
   }
 
