@@ -253,15 +253,18 @@ gst_gl_memory_dma_buffer_to_gstbuffer (GstGLContext *ctx, GstVideoInfo * info,
   GstBuffer *buf;
   GstGLMemoryDMA *glmem;
   GstGLSyncMeta *sync_meta;
+  GstClockTime ts;
 
   sync_meta = gst_buffer_get_gl_sync_meta (glbuf);
-  if (!sync_meta) {
-    GstClockTime ts = gst_util_get_timestamp ();
+  ts = gst_util_get_timestamp ();
+  if (sync_meta) {
+    gst_gl_sync_meta_wait_cpu (sync_meta, ctx);
+  } else {
     gst_gl_context_thread_add (ctx, (GstGLContextThreadFunc) _finish_texture, NULL);
-    ts = gst_util_get_timestamp () - ts;
-    GST_CAT_DEBUG (GST_CAT_GL_DMA_MEMORY,
-        "glFinish %.2g ms", (double) ts / GST_MSECOND);
   }
+  ts = gst_util_get_timestamp () - ts;
+  GST_CAT_DEBUG (GST_CAT_GL_DMA_MEMORY, "%s %.2g ms",
+      sync_meta ? "wait_cpu" : "glFinish", (double) ts / GST_MSECOND);
 
   glmem = gst_buffer_peek_memory (glbuf, 0);
 
