@@ -371,6 +371,7 @@ _try_export_dmabuf (GstGLDownloadElement * download, GstBuffer * inbuf)
 
   src_caps = gst_pad_get_current_caps (GST_BASE_TRANSFORM (download)->srcpad);
   gst_video_info_from_caps (&out_info, src_caps);
+  gst_caps_unref (src_caps);
 
   if (download->add_videometa) {
     gst_buffer_add_video_meta_full (buffer, GST_VIDEO_FRAME_FLAG_NONE,
@@ -405,15 +406,17 @@ gst_gl_download_element_prepare_output_buffer (GstBaseTransform * bt,
   GstGLDownloadElement *dl = GST_GL_DOWNLOAD_ELEMENT (bt);
   GstCaps *src_caps = gst_pad_get_current_caps (bt->srcpad);
   gint i, n;
-  GstGLMemory *glmem;
+  GstMemory *mem;
+  GstVideoInfo info;
 
-  glmem = gst_buffer_peek_memory (inbuf, 0);
+  mem = gst_buffer_peek_memory (inbuf, 0);
+  gst_video_info_from_caps (&info, src_caps);
+  gst_caps_replace (&src_caps, NULL);
+
 #if GST_GL_HAVE_IONDMA
-  if (gst_is_gl_memory_dma (glmem)) {
+  if (gst_is_gl_memory_dma (mem)) {
     GstGLContext *context = GST_GL_BASE_FILTER (bt)->context;
-    GstVideoInfo info;
 
-    gst_video_info_from_caps (&info, src_caps);
     *outbuf = gst_gl_memory_dma_buffer_to_gstbuffer (context, &info, inbuf);
 
     GST_DEBUG_OBJECT (dl, "gl download with dma buf.");
@@ -423,11 +426,9 @@ gst_gl_download_element_prepare_output_buffer (GstBaseTransform * bt,
 #endif
 
 #if GST_GL_HAVE_PHYMEM
-  if (gst_is_gl_physical_memory (glmem)) {
+  if (gst_is_gl_physical_memory (mem)) {
     GstGLContext *context = GST_GL_BASE_FILTER (bt)->context;
-    GstVideoInfo info;
 
-    gst_video_info_from_caps (&info, src_caps);
     *outbuf = gst_gl_phymem_buffer_to_gstbuffer (context, &info, inbuf);
 
     GST_DEBUG_OBJECT (dl, "gl download with direct viv.");
@@ -472,10 +473,12 @@ gst_gl_download_element_prepare_output_buffer (GstBaseTransform * bt,
       gst_caps_features_remove (features, GST_CAPS_FEATURE_MEMORY_DMABUF);
 
       if (!gst_base_transform_update_src_caps (bt, src_caps)) {
+        gst_caps_unref (src_caps);
         GST_ERROR_OBJECT (bt, "DMABuf exportation didn't work and system "
             "memory is not supported.");
         return GST_FLOW_NOT_NEGOTIATED;
       }
+      gst_caps_unref (src_caps);
     }
   }
 #endif
