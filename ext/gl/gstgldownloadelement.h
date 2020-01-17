@@ -25,6 +25,7 @@
 #include <gst/gstmemory.h>
 
 #include <gst/gl/gl.h>
+#include <gst/gl/gstglfuncs.h>
 
 G_BEGIN_DECLS
 
@@ -39,6 +40,9 @@ GType gst_gl_download_element_get_type (void);
 typedef struct _GstGLDownloadElement GstGLDownloadElement;
 typedef struct _GstGLDownloadElementClass GstGLDownloadElementClass;
 
+typedef GLboolean (GL_APIENTRYP PFNGLEXPORTTEXIMAGEDMAPROC)
+    (GLuint Texture, GLint *Fd, GLint *Fourcc, GLsizei *Width, GLsizei *Height, GLsizei *Stride);
+
 struct _GstGLDownloadElement
 {
   /* <private> */
@@ -47,6 +51,13 @@ struct _GstGLDownloadElement
   gboolean do_pbo_transfers;
   GstAllocator * dmabuf_allocator;
   gboolean add_videometa;
+
+  PFNGLEXPORTTEXIMAGEDMAPROC glExportTexImageDMA;
+  GstGLContext *export_context;
+  GstBufferPool * export_pool;
+  GstVideoInfo src_info;
+  GstVideoInfo export_info;
+  GstVideoConverter *converter;
 };
 
 struct _GstGLDownloadElementClass

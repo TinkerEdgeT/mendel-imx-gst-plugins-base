@@ -36,6 +36,8 @@
 
 #if GST_GL_HAVE_IONDMA
 #include <gst/gl/gstglmemorydma.h>
+#include <gst/allocators/gstionmemory.h>
+#include <libdrm/drm_fourcc.h>
 #endif
 
 GST_DEBUG_CATEGORY_STATIC (gst_gl_download_element_debug);
@@ -64,6 +66,13 @@ static gboolean gst_gl_download_element_decide_allocation (GstBaseTransform *
     trans, GstQuery * query);
 static void gst_gl_download_element_finalize (GObject * object);
 
+#if GST_GL_HAVE_IONDMA
+static gboolean gst_gl_download_element_gl_start (GstGLBaseFilter * base);
+static void gst_gl_download_element_gl_stop (GstGLBaseFilter * base);
+static GstBuffer *gst_gl_download_element_export_teximage_dma (
+    GstGLDownloadElement * dl, GstBuffer * inbuf);
+#endif
+
 #if GST_GL_HAVE_PLATFORM_EGL && GST_GL_HAVE_DMABUF
 #define EXTRA_CAPS_TEMPLATE "video/x-raw(" GST_CAPS_FEATURE_MEMORY_DMABUF "); "
 #else
@@ -90,6 +99,9 @@ gst_gl_download_element_class_init (GstGLDownloadElementClass * klass)
   GstBaseTransformClass *bt_class = GST_BASE_TRANSFORM_CLASS (klass);
   GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
+#if GST_GL_HAVE_IONDMA
+  GstGLBaseFilterClass *gl_class = GST_GL_BASE_FILTER_CLASS (klass);
+#endif
 
   bt_class->transform_caps = gst_gl_download_element_transform_caps;
   bt_class->set_caps = gst_gl_download_element_set_caps;
@@ -101,6 +113,11 @@ gst_gl_download_element_class_init (GstGLDownloadElementClass * klass)
   bt_class->propose_allocation = gst_gl_download_element_propose_allocation;
 
   bt_class->passthrough_on_same_caps = TRUE;
+
+#if GST_GL_HAVE_IONDMA
+  gl_class->gl_start = gst_gl_download_element_gl_start;
+  gl_class->gl_stop = gst_gl_download_element_gl_stop;
+#endif
 
   gst_element_class_add_static_pad_template (element_class,
       &gst_gl_download_element_src_pad_template);
@@ -414,6 +431,11 @@ gst_gl_download_element_prepare_output_buffer (GstBaseTransform * bt,
   gst_caps_replace (&src_caps, NULL);
 
 #if GST_GL_HAVE_IONDMA
+  *outbuf = gst_gl_download_element_export_teximage_dma (dl, inbuf);
+  if (*outbuf) {
+    return GST_FLOW_OK;
+  }
+
   if (gst_is_gl_memory_dma (mem)) {
     GstGLContext *context = GST_GL_BASE_FILTER (bt)->context;
 
@@ -508,6 +530,13 @@ gst_gl_download_element_propose_allocation (GstBaseTransform * bt,
   GstStructure *config;
   gsize size;
   GstVideoFormat fmt;
+
+#if GST_GL_HAVE_IONDMA
+  if (download->glExportTexImageDMA) {
+    return GST_BASE_TRANSFORM_CLASS (parent_class)->propose_allocation (bt,
+        decide_query, query);
+  }
+#endif
 
   gst_query_parse_allocation (query, &caps, NULL);
   if (!gst_video_info_from_caps (&info, caps)) {
@@ -609,3 +638,363 @@ gst_gl_download_element_finalize (GObject * object)
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
+
+#if GST_GL_HAVE_IONDMA
+static const gchar*
+_video_format_to_string (GstVideoFormat format)
+{
+  if (format == GST_VIDEO_FORMAT_UNKNOWN)
+    return "UNSET";
+  return gst_video_format_to_string (format);
+}
+
+static gboolean
+has_blitter (GstGLDownloadElement * dl, gboolean * blitter)
+{
+  gsize length;
+  gchar *contents = NULL;
+  gboolean ret = FALSE;
+
+  if (!g_file_get_contents ("/sys/firmware/devicetree/base/model",
+      &contents, &length, NULL)) {
+    GST_WARNING_OBJECT (dl, "Failed to read devicetree model");
+    goto beach;
+  }
+
+  if (g_strrstr(contents, "i.MX8MQ")) {
+    ret = TRUE;
+    *blitter = TRUE;
+  } else if (g_strrstr(contents, "i.MX8MM")) {
+    ret = TRUE;
+    *blitter = FALSE;
+  } else {
+    GST_WARNING_OBJECT (dl, "Unsupported model '%s'", contents);
+  }
+
+beach:
+  g_free (contents);
+  return ret;
+}
+
+static void
+setup_export_teximage_dma (GstGLDownloadElement * dl)
+{
+  gboolean blitter;
+  GstStructure *config;
+  GstAllocationParams params;
+  GstVideoAlignment alignment;
+  GstGLContext *export_context = NULL;
+  GstCaps *export_caps = NULL;
+  GstBufferPool *pool = NULL;
+  GstVideoConverter *converter = NULL;
+  GstVideoFormat export_format = GST_VIDEO_FORMAT_UNKNOWN, src_format;
+  GstGLContext *context = GST_GL_BASE_FILTER (dl)->context;
+  GstBaseTransform *transform = GST_BASE_TRANSFORM (dl);
+  GstCaps *src_caps = gst_pad_get_current_caps (transform->srcpad);
+    PFNGLEXPORTTEXIMAGEDMAPROC glExportTexImageDMA =
+      gst_gl_context_get_proc_address (context, "glExportTexImageDMA");
+
+  gst_video_info_init (&dl->export_info);
+  gst_video_info_init (&dl->src_info);
+  gst_allocation_params_init (&params);
+  gst_video_alignment_reset (&alignment);
+  dl->glExportTexImageDMA = NULL;
+
+  if (!glExportTexImageDMA) {
+    GST_INFO_OBJECT (dl, "glExportTexImageDMA not supported");
+    goto beach;
+  }
+
+  if (!gst_video_info_from_caps (&dl->src_info, src_caps)) {
+    GST_WARNING_OBJECT (dl, "invalid src_caps %" GST_PTR_FORMAT, src_caps);
+    goto beach;
+  }
+  src_format = GST_VIDEO_INFO_FORMAT (&dl->src_info);
+
+  if (!has_blitter (dl, &blitter)) {
+    goto beach;
+  }
+
+  switch (src_format) {
+    case GST_VIDEO_FORMAT_RGBA:
+      export_format = src_format;
+      break;
+    case GST_VIDEO_FORMAT_RGB:
+    case GST_VIDEO_FORMAT_BGR:
+      dl->src_info.stride[0] = dl->src_info.width * 3;
+      dl->src_info.size = dl->src_info.stride[0] * dl->src_info.height;
+      /* Tightly pack 24bit formats and fall through. */
+    case GST_VIDEO_FORMAT_BGRA:
+      export_format = blitter ? src_format : GST_VIDEO_FORMAT_RGBA;
+      break;
+    default:
+      export_format = GST_VIDEO_FORMAT_UNKNOWN;
+      break;
+  }
+
+  if (export_format == GST_VIDEO_FORMAT_UNKNOWN) {
+    GST_INFO_OBJECT (dl, "Format '%s' not supported",
+        _video_format_to_string (src_format));
+    goto beach;
+  }
+
+  gst_video_info_set_format(&dl->export_info, export_format,
+      blitter ? dl->src_info.width : GST_ROUND_UP_16 (dl->src_info.width),
+      blitter ? dl->src_info.height : GST_ROUND_UP_16 (dl->src_info.height));
+  dl->export_info.colorimetry = dl->src_info.colorimetry;
+  dl->export_info.par_n = dl->src_info.par_n;
+  dl->export_info.par_d = dl->src_info.par_d;
+  dl->export_info.fps_n = dl->src_info.fps_n;
+  dl->export_info.fps_d = dl->src_info.fps_d;
+  params.align = blitter ? 0 : 127;
+  alignment.stride_align[0] = params.align;
+  gst_video_info_align (&dl->export_info, &alignment);
+  export_caps = gst_video_info_to_caps (&dl->export_info);
+  GST_DEBUG_OBJECT (dl, "export_caps %" GST_PTR_FORMAT, export_caps);
+  GST_DEBUG_OBJECT (dl, "src_caps %" GST_PTR_FORMAT, src_caps);
+
+  pool = gst_video_buffer_pool_new ();
+  config = gst_buffer_pool_get_config (pool);
+
+  gst_buffer_pool_config_set_params (config, export_caps,
+      dl->export_info.size, 0, 3);
+  gst_buffer_pool_config_add_option (config,
+      GST_BUFFER_POOL_OPTION_VIDEO_META);
+  gst_buffer_pool_config_add_option (config,
+    GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
+  gst_buffer_pool_config_set_video_alignment (config, &alignment);
+  gst_buffer_pool_config_set_allocator (config,
+      gst_ion_allocator_obtain (), &params);
+
+  if (!gst_buffer_pool_set_config (pool, config)) {
+    GST_ERROR_OBJECT (dl, "gst_buffer_pool_set_config failed");
+    goto beach;
+  }
+  gst_buffer_pool_set_active (pool, TRUE);
+
+  dl->export_info.width = dl->src_info.width;
+  dl->export_info.height = dl->src_info.height;
+
+  if (export_format != src_format ||
+      dl->export_info.stride[0] != dl->src_info.stride[0]) {
+    converter = gst_video_converter_new (&dl->export_info, &dl->src_info,
+        gst_structure_new ("GstVideoConvertConfig",
+            GST_VIDEO_CONVERTER_OPT_THREADS, G_TYPE_UINT,
+            g_get_num_processors(), NULL));
+    if (!converter) {
+      GST_ERROR_OBJECT (dl, "gst_video_converter_new failed");
+      goto beach;
+    }
+  }
+
+  export_context = gst_gl_context_new (gst_gl_context_get_display (context));
+  if (!export_context) {
+    GST_ERROR_OBJECT (dl, "gst_gl_context_new failed");
+    goto beach;
+  }
+
+  if (!gst_gl_context_create (export_context, context, NULL)) {
+    GST_ERROR_OBJECT (dl, "gst_gl_context_create failed");
+    goto beach;
+  }
+
+  dl->glExportTexImageDMA = glExportTexImageDMA;
+  dl->export_context = export_context;
+  dl->export_pool = pool;
+  dl->converter = converter;
+  export_context = NULL;
+  pool = NULL;
+  converter = NULL;
+
+beach:
+  if (src_caps) {
+    gst_caps_unref (src_caps);
+  }
+  if (export_caps) {
+    gst_caps_unref (export_caps);
+  }
+  if (pool) {
+    gst_object_unref (pool);
+  }
+  if (converter) {
+    gst_video_converter_free (converter);
+  }
+  if (export_context) {
+    gst_object_unref (export_context);
+  }
+
+  GST_INFO_OBJECT (dl,
+      "glExportTexImageDMA %d converter %d: %s (%dx%d %d) -> %s (%dx%d %d)",
+      !!dl->glExportTexImageDMA, !!dl->converter,
+      _video_format_to_string (GST_VIDEO_INFO_FORMAT (&dl->export_info)),
+      dl->export_info.width, dl->export_info.height, dl->export_info.stride[0],
+      _video_format_to_string (GST_VIDEO_INFO_FORMAT (&dl->src_info)),
+      dl->src_info.width, dl->src_info.height, dl->src_info.stride[0]);
+}
+
+struct ExportParams
+{
+  GstGLDownloadElement *dl;
+  GLuint tex;
+  GLint fd;
+  GLint fourcc;
+  GLsizei width;
+  GLsizei height;
+  GLsizei stride;
+  GLboolean res;
+};
+
+static void
+_export_gl (GstGLContext * context, struct ExportParams * params)
+{
+  GstClockTime ts;
+
+  ts = gst_util_get_timestamp ();
+  params->res = params->dl->glExportTexImageDMA(params->tex, &params->fd,
+      &params->fourcc, &params->width, &params->height, &params->stride);
+  ts = gst_util_get_timestamp () - ts;
+  GST_DEBUG_OBJECT (params->dl, "glExportTexImageDMA %.2g ms",
+      (double) ts / GST_MSECOND);
+}
+
+static GstBuffer *
+gst_gl_download_element_export_teximage_dma (
+    GstGLDownloadElement * dl, GstBuffer * inbuf)
+{
+  GstVideoFormat export_format;
+  GstMemory *memory = gst_buffer_peek_memory (inbuf, 0);
+  GstGLContext *context = GST_GL_BASE_MEMORY_CAST (memory)->context;
+  GstBuffer *export_buf = NULL, *src_buf = NULL, *outbuf = NULL;
+  struct ExportParams params = { 0 };
+
+  if (!dl->glExportTexImageDMA) {
+    goto beach;
+  }
+
+  if (!gst_gl_context_can_share (context, dl->export_context)) {
+    GST_WARNING_OBJECT (dl, "buffer and internal GL contexts can't share"
+        " resources, performance will be degraded");
+  } else {
+    context = dl->export_context;
+  }
+
+  if (gst_buffer_pool_acquire_buffer (dl->export_pool, &export_buf, NULL) !=
+      GST_FLOW_OK) {
+    GST_ERROR_OBJECT (dl, "gst_buffer_pool_acquire_buffer failed");
+    goto beach;
+  }
+
+  export_format = GST_VIDEO_INFO_FORMAT (&dl->export_info);
+  switch (export_format) {
+    case GST_VIDEO_FORMAT_RGBA:
+      params.fourcc = DRM_FORMAT_ABGR8888;
+      break;
+    case GST_VIDEO_FORMAT_BGRA:
+      params.fourcc = DRM_FORMAT_ARGB8888;
+      break;
+    case GST_VIDEO_FORMAT_RGB:
+      params.fourcc = DRM_FORMAT_BGR888;
+      break;
+    case GST_VIDEO_FORMAT_BGR:
+      params.fourcc = DRM_FORMAT_RGB888;
+      break;
+    default:
+      goto beach;
+  }
+
+  params.dl = dl;
+  params.tex = gst_gl_memory_get_texture_id (GST_GL_MEMORY_CAST (memory));
+  params.fd = gst_dmabuf_memory_get_fd (gst_buffer_peek_memory (export_buf, 0));
+  params.width = dl->export_info.width;
+  params.height = dl->export_info.height;
+  params.stride = dl->export_info.stride[0];
+  gst_gl_context_thread_add (context, (GstGLContextThreadFunc) _export_gl,
+      &params);
+
+  if (!params.res) {
+    GST_ERROR_OBJECT (dl, "glExportTexImageDMA failed");
+    goto beach;
+  }
+
+  if (dl->converter) {
+    GstVideoFrame in_frame, out_frame;
+    GstClockTime ts;
+
+    /* TODO: buffer pool */
+    src_buf = gst_buffer_new_allocate (NULL, dl->src_info.size, NULL);
+
+    if (!src_buf) {
+      GST_ERROR_OBJECT (dl, "failed to allocate buffer of size %zu",
+          dl->src_info.size);
+      goto beach;
+    }
+
+    ts = gst_util_get_timestamp ();
+    if (!gst_video_frame_map (&in_frame, &dl->export_info, export_buf,
+        GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
+      GST_ERROR_OBJECT (dl, "gst_video_frame_map failed");
+      goto beach;
+    }
+    if (!gst_video_frame_map (&out_frame, &dl->src_info, src_buf,
+        GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
+      GST_ERROR_OBJECT (dl, "gst_video_frame_map failed");
+      goto beach;
+    }
+    gst_video_converter_frame (dl->converter, &in_frame, &out_frame);
+    gst_video_frame_unmap(&out_frame);
+    gst_video_frame_unmap(&in_frame);
+    ts = gst_util_get_timestamp () - ts;
+    GST_DEBUG_OBJECT (dl, "convert %.2g ms",
+        (double) ts / GST_MSECOND);
+
+    outbuf = src_buf;
+    src_buf = NULL;
+  } else {
+    outbuf = export_buf;
+    export_buf = NULL;
+  }
+
+  gst_buffer_copy_into (outbuf, inbuf,
+        GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+
+beach:
+  gst_buffer_replace (&export_buf, NULL);
+  gst_buffer_replace (&src_buf, NULL);
+  return outbuf;
+}
+
+static gboolean
+gst_gl_download_element_gl_start (GstGLBaseFilter * base)
+{
+  GstGLDownloadElement *download = GST_GL_DOWNLOAD_ELEMENT_CAST (base);
+
+  setup_export_teximage_dma (download);
+
+  return GST_GL_BASE_FILTER_CLASS (parent_class)->gl_start (base);
+}
+
+static void
+gst_gl_download_element_gl_stop (GstGLBaseFilter * base)
+{
+  GstGLDownloadElement *download = GST_GL_DOWNLOAD_ELEMENT_CAST (base);
+
+  GST_GL_BASE_FILTER_CLASS (parent_class)->gl_stop (base);
+
+  if (download->export_pool) {
+    gst_buffer_pool_set_active (download->export_pool, FALSE);
+    gst_object_unref (GST_OBJECT (download->export_pool));
+    download->export_pool = NULL;
+  }
+
+  if (download->converter) {
+    gst_video_converter_free (download->converter);
+    download->converter = NULL;
+  }
+
+  if (download->export_context) {
+    gst_object_unref (download->export_context);
+    download->export_context = NULL;
+  }
+}
+#endif
+
