@@ -2361,9 +2361,9 @@ gst_video_converter_new (GstVideoInfo * in_info, GstVideoInfo * out_info,
   n_threads = get_opt_uint (convert, GST_VIDEO_CONVERTER_OPT_THREADS, 1);
   if (n_threads == 0 || n_threads > g_get_num_processors ())
     n_threads = g_get_num_processors ();
-  /* Magic number of 200 lines */
-  if (MAX (convert->out_height, convert->in_height) / n_threads < 200)
-    n_threads = (MAX (convert->out_height, convert->in_height) + 199) / 200;
+  /* Magic number of 50 lines */
+  if (MAX (convert->out_height, convert->in_height) / n_threads < 50)
+    n_threads = (MAX (convert->out_height, convert->in_height) + 49) / 50;
   convert->conversion_runner = gst_parallelized_task_runner_new (n_threads);
 
   if (video_converter_lookup_fastpath (convert))
