@@ -98,6 +98,7 @@ static gboolean
 _gl_mem_create (GstGLMemoryDMA * gl_mem, GError ** error)
 {
   GstGLContext *context = gl_mem->mem.mem.context;
+  const GstGLFuncs *gl = context->gl_vtable;
   GstGLBaseMemoryAllocatorClass *alloc_class;
   guint dma_fd;
 
@@ -114,8 +115,6 @@ _gl_mem_create (GstGLMemoryDMA * gl_mem, GError ** error)
     GST_CAT_ERROR (GST_CAT_GL_DMA_MEMORY, "Can't allocate eglimage memory");
     return FALSE;
   }
-
-  const GstGLFuncs *gl = context->gl_vtable;
 
   gl->ActiveTexture (GL_TEXTURE0);
   gl->BindTexture (GL_TEXTURE_2D, gl_mem->mem.tex_id);
@@ -189,7 +188,7 @@ _gl_mem_dma_alloc (GstGLBaseMemoryAllocator * allocator,
   mem->dma = gst_allocator_alloc (gl_dma_alloc->ion_allocator, size, mem->params);
 
   if (!mem->dma) {
-    GST_CAT_ERROR (GST_CAT_GL_DMA_MEMORY, "Can't allocate dma memory size %d", size);
+    GST_CAT_ERROR (GST_CAT_GL_DMA_MEMORY, "Can't allocate dma memory size %zu", size);
     g_free(mem);
     return NULL;
   }
@@ -266,7 +265,7 @@ gst_gl_memory_dma_buffer_to_gstbuffer (GstGLContext *ctx, GstVideoInfo * info,
   GST_CAT_DEBUG (GST_CAT_GL_DMA_MEMORY, "%s %.2g ms",
       sync_meta ? "wait_cpu" : "glFinish", (double) ts / GST_MSECOND);
 
-  glmem = gst_buffer_peek_memory (glbuf, 0);
+  glmem = (GstGLMemoryDMA*) gst_buffer_peek_memory (glbuf, 0);
 
   /* Use GstVideoInfo from alloc time, not parsed from caps with default strides. */
   info = &glmem->mem.info;
