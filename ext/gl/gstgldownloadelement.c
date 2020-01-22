@@ -35,6 +35,7 @@
 #endif
 
 #if GST_GL_HAVE_IONDMA
+#include <gst/gl/egl/gstglmemoryegl.h>
 #include <gst/gl/gstglmemorydma.h>
 #include <gst/allocators/gstionmemory.h>
 #include <libdrm/drm_fourcc.h>
@@ -865,6 +866,7 @@ gst_gl_download_element_export_teximage_dma (
   GstMemory *memory = gst_buffer_peek_memory (inbuf, 0);
   GstGLContext *context = GST_GL_BASE_MEMORY_CAST (memory)->context;
   GstBuffer *export_buf = NULL, *src_buf = NULL, *outbuf = NULL;
+  GstGLColorConvert *glconverter = NULL;
   struct ExportParams params = { 0 };
 
   if (!dl->glExportTexImageDMA) {
@@ -876,6 +878,48 @@ gst_gl_download_element_export_teximage_dma (
         " resources, performance will be degraded");
   } else {
     context = dl->export_context;
+  }
+
+  /* YUV dma-bufs are uploaded to GL textures as EGLImage and stamped as RGBA
+   * as they can be sampled by HW as such when drawing. However we can't get
+   * CPU accessible RGBA data out of them without drawing at least once.
+   * This is analogous to the disable-passthrough property NXP added to the
+   * glcolorconvert element.
+   */
+  if (gst_is_gl_memory_egl (memory)) {
+    if (G_UNLIKELY (dl->glconverter == NULL)) {
+      GstCaps *sink_caps = NULL;
+
+      sink_caps = gst_pad_get_current_caps (GST_BASE_TRANSFORM (dl)->sinkpad);
+      glconverter = gst_gl_color_convert_new (context);
+
+      if (!gst_gl_color_convert_set_caps (glconverter, sink_caps, sink_caps)) {
+        gst_caps_unref (sink_caps);
+        GST_ERROR_OBJECT (dl, "failed to set gl converter caps");
+        goto beach;
+      }
+
+      gst_caps_unref (sink_caps);
+      dl->glconverter = gst_object_ref (glconverter);
+      GST_DEBUG_OBJECT (dl, "created gl color converter %p", dl->glconverter);
+    } else {
+      glconverter = gst_object_ref (dl->glconverter);
+    }
+  }
+
+  if (glconverter) {
+    GstBuffer *tmp_buf;
+
+    tmp_buf = gst_gl_color_convert_perform (glconverter, inbuf);
+    if (!tmp_buf) {
+      inbuf = NULL;
+      GST_ERROR_OBJECT (dl, "failed to convert inbuf");
+      goto beach;
+    }
+    gst_buffer_copy_into (tmp_buf, inbuf,
+        GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+    inbuf = tmp_buf;
+    memory = gst_buffer_peek_memory (inbuf, 0);
   }
 
   if (gst_buffer_pool_acquire_buffer (dl->export_pool, &export_buf, NULL) !=
@@ -960,6 +1004,12 @@ gst_gl_download_element_export_teximage_dma (
 beach:
   gst_buffer_replace (&export_buf, NULL);
   gst_buffer_replace (&src_buf, NULL);
+  if (glconverter) {
+    gst_object_unref (glconverter);
+    if (inbuf) {
+      gst_buffer_unref (inbuf);
+    }
+  }
   return outbuf;
 }
 
@@ -989,6 +1039,11 @@ gst_gl_download_element_gl_stop (GstGLBaseFilter * base)
   if (download->converter) {
     gst_video_converter_free (download->converter);
     download->converter = NULL;
+  }
+
+  if (download->glconverter) {
+    gst_object_unref (download->glconverter);
+    download->glconverter = NULL;
   }
 
   if (download->export_context) {

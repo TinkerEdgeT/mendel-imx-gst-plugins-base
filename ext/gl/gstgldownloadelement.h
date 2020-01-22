@@ -58,6 +58,7 @@ struct _GstGLDownloadElement
   GstVideoInfo src_info;
   GstVideoInfo export_info;
   GstVideoConverter *converter;
+  GstGLColorConvert *glconverter;
 };
 
 struct _GstGLDownloadElementClass
