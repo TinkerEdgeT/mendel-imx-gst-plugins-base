@@ -88,7 +88,6 @@ gst_fd_mem_map (GstMemory * gmem, gsize maxsize, GstMapFlags flags)
 
   prot = flags & GST_MAP_READ ? PROT_READ : 0;
   prot |= flags & GST_MAP_WRITE ? PROT_WRITE : 0;
-  prot |= mem->flags & GST_FD_MEMORY_FLAG_PROT_WRITE ? PROT_WRITE : 0;
 
   g_mutex_lock (&mem->lock);
   /* do not mmap twice the buffer */
