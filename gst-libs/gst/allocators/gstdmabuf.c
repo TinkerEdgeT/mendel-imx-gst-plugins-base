@@ -60,7 +60,14 @@ gst_dmabuf_mem_map (GstMemory * gmem, GstMapInfo * info, gsize maxsize)
     sync.flags |= DMA_BUF_SYNC_WRITE;
 #endif
 
-  ret = allocator->mem_map (gmem, maxsize, info->flags);
+  /* Workaround to enable sending mapped dmabuf straight to TPU.
+   * Its driver requires all memory sent to it to be writable so
+   * for dmabuf we emulate the behavior of system memory which is
+   * also always really writable even if mapped only for reading
+   * with GST_MAP_READ.
+   * b/148226798
+   */
+  ret = allocator->mem_map (gmem, maxsize, info->flags | GST_MAP_WRITE);
 
 #ifdef HAVE_LINUX_DMA_BUF_H
   if (ret) {
