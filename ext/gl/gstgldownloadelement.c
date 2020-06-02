@@ -750,6 +750,11 @@ setup_export_teximage_dma (GstGLDownloadElement * dl)
   params.align = blitter ? 0 : 127;
   alignment.stride_align[0] = params.align;
   gst_video_info_align (&dl->export_info, &alignment);
+  if (blitter) {
+    /* Always tightly pack. */
+    dl->export_info.stride[0] = dl->export_info.width *
+        GST_VIDEO_FORMAT_INFO_PSTRIDE (dl->export_info.finfo, 0);
+  }
   export_caps = gst_video_info_to_caps (&dl->export_info);
   GST_DEBUG_OBJECT (dl, "export_caps %" GST_PTR_FORMAT, export_caps);
   GST_DEBUG_OBJECT (dl, "src_caps %" GST_PTR_FORMAT, src_caps);
@@ -759,8 +764,6 @@ setup_export_teximage_dma (GstGLDownloadElement * dl)
 
   gst_buffer_pool_config_set_params (config, export_caps,
       dl->export_info.size, 0, 3);
-  gst_buffer_pool_config_add_option (config,
-      GST_BUFFER_POOL_OPTION_VIDEO_META);
   gst_buffer_pool_config_add_option (config,
     GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
   gst_buffer_pool_config_set_video_alignment (config, &alignment);
@@ -866,6 +869,7 @@ gst_gl_download_element_export_teximage_dma (
   GstMemory *memory = gst_buffer_peek_memory (inbuf, 0);
   GstGLContext *context = GST_GL_BASE_MEMORY_CAST (memory)->context;
   GstBuffer *export_buf = NULL, *src_buf = NULL, *outbuf = NULL;
+  GstVideoMeta *export_meta = NULL;
   GstGLColorConvert *glconverter = NULL;
   struct ExportParams params = { 0 };
 
@@ -958,6 +962,18 @@ gst_gl_download_element_export_teximage_dma (
   if (!params.res) {
     GST_ERROR_OBJECT (dl, "glExportTexImageDMA failed");
     goto beach;
+  }
+
+  /* If we're packing RGB data more tightly than GStreamer normally does
+     we must manually set our stride on the meta. */
+  export_meta = gst_buffer_get_video_meta (export_buf);
+  if (G_LIKELY (!export_meta)) {
+    gst_buffer_add_video_meta_full (export_buf, GST_VIDEO_FRAME_FLAG_NONE,
+        dl->export_info.finfo->format, dl->export_info.width,
+        dl->export_info.height, dl->export_info.finfo->n_planes,
+        dl->export_info.offset, dl->export_info.stride);
+  } else {
+    export_meta->stride[0] = dl->export_info.stride[0];
   }
 
   if (dl->converter) {
