@@ -1355,7 +1355,8 @@ _RGB_pixel_order (const gchar * expected, const gchar * wanted)
   int len;
   gboolean discard_output = TRUE;
 
-  if (g_ascii_strcasecmp (expected, wanted) == 0) {
+  /* Return value must have 4 chars (1 per each 4 channels). */
+  if (g_ascii_strcasecmp (expected, wanted) == 0 && strlen (expected) == 4) {
     g_string_free (ret, TRUE);
     return g_ascii_strdown (expected, -1);
   }
