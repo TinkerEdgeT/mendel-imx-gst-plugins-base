@@ -512,6 +512,9 @@ _drm_direct_fourcc_from_info (GstVideoInfo * info)
     case GST_VIDEO_FORMAT_xBGR:
       return DRM_FORMAT_RGBX8888;
 
+    case GST_VIDEO_FORMAT_RGB:
+      return DRM_FORMAT_BGR888;
+
     default:
       GST_INFO ("Unsupported format for direct DMABuf.");
       return -1;
