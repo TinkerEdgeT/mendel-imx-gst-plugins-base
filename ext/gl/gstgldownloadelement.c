@@ -932,19 +932,21 @@ gst_gl_download_element_export_teximage_dma (
     goto beach;
   }
 
+  /* GL has no notion of BGR/BGRA so GStreamer stores its data labeled RGBA
+   * and swizzles with shaders. The driver doesn't know what the texture
+   * contains based on its internal book keeping, it's always RGBA as far as
+   * it knows. So we always export as RGB/A to get the output of GStreamer
+   * shaders in the intended format.
+   */
   export_format = GST_VIDEO_INFO_FORMAT (&dl->export_info);
   switch (export_format) {
     case GST_VIDEO_FORMAT_RGBA:
+    case GST_VIDEO_FORMAT_BGRA:
       params.fourcc = DRM_FORMAT_ABGR8888;
       break;
-    case GST_VIDEO_FORMAT_BGRA:
-      params.fourcc = DRM_FORMAT_ARGB8888;
-      break;
     case GST_VIDEO_FORMAT_RGB:
-      params.fourcc = DRM_FORMAT_BGR888;
-      break;
     case GST_VIDEO_FORMAT_BGR:
-      params.fourcc = DRM_FORMAT_RGB888;
+      params.fourcc = DRM_FORMAT_BGR888;
       break;
     default:
       goto beach;
